@@ -14,7 +14,7 @@ SCOPES = [
 TXN_SHEET = "Transactions"
 DIV_SHEET = "Dividends"
 
-TXN_COLUMNS = ["Date", "Type", "Ticker", "Currency", "Price", "Quantity", "Brokerage Fee", "Exchange Rate"]
+TXN_COLUMNS = ["Date", "Type", "Ticker", "Currency", "Price", "Quantity", "Charge Fee", "Exchange Rate"]
 DIV_COLUMNS = ["Date", "Ticker", "Currency", "Quantity Held", "Gross", "Withholding Tax", "Net"]
 
 
@@ -75,7 +75,7 @@ def get_holdings_snapshot(as_of_date=None):
     df["Date"] = pd.to_datetime(df["Date"])
     df["Price"] = pd.to_numeric(df["Price"], errors="coerce")
     df["Quantity"] = pd.to_numeric(df["Quantity"], errors="coerce")
-    df["Brokerage Fee"] = pd.to_numeric(df["Brokerage Fee"], errors="coerce").fillna(0)
+    df["Charge Fee"] = pd.to_numeric(df["Charge Fee"], errors="coerce").fillna(0)
     if as_of_date is not None:
         df = df[df["Date"] <= pd.to_datetime(as_of_date)]
     df = df.sort_values("Date")
@@ -86,7 +86,7 @@ def get_holdings_snapshot(as_of_date=None):
         for _, row in group.iterrows():
             if row["Type"] == "Buy":
                 existing_value = qty_held * avg_cost
-                buy_value = row["Quantity"] * row["Price"] + row["Brokerage Fee"]
+                buy_value = row["Quantity"] * row["Price"]
                 qty_held += row["Quantity"]
                 avg_cost = (existing_value + buy_value) / qty_held if qty_held > 0 else 0
             else:
@@ -136,7 +136,7 @@ with tab_form:
         with col5:
             quantity = st.number_input("Quantity (Shares)", min_value=0.0, step=1.0, format="%.4f")
         with col6:
-            brokerage_fee = st.number_input("Brokerage Fee", min_value=0.0, step=0.01, format="%.2f")
+            brokerage_fee = st.number_input("Charge Fee", min_value=0.0, step=0.01, format="%.2f")
 
         if currency == "USD":
             exchange_rate = st.number_input(
@@ -163,7 +163,7 @@ with tab_form:
                     "Currency": currency,
                     "Price": price,
                     "Quantity": quantity,
-                    "Brokerage Fee": brokerage_fee,
+                    "Charge Fee": brokerage_fee,
                     "Exchange Rate": exchange_rate,
                 }
                 try:
@@ -286,7 +286,7 @@ with tab_dashboard:
         df["Date"] = pd.to_datetime(df["Date"])
         df["Price"] = pd.to_numeric(df["Price"], errors="coerce")
         df["Quantity"] = pd.to_numeric(df["Quantity"], errors="coerce")
-        df["Brokerage Fee"] = pd.to_numeric(df["Brokerage Fee"], errors="coerce").fillna(0)
+        df["Charge Fee"] = pd.to_numeric(df["Charge Fee"], errors="coerce").fillna(0)
         df = df.sort_values("Date")
 
         div_df = pd.DataFrame(st.session_state.dividends) if st.session_state.dividends else pd.DataFrame(columns=["Currency", "Net", "Date"])
@@ -321,12 +321,12 @@ with tab_dashboard:
                 for _, row in group.iterrows():
                     if row["Type"] == "Buy":
                         total_existing = qty_held * avg_cost
-                        buy_value = row["Quantity"] * row["Price"] + row["Brokerage Fee"]
+                        buy_value = row["Quantity"] * row["Price"]
                         qty_held += row["Quantity"]
                         avg_cost = (total_existing + buy_value) / qty_held if qty_held > 0 else 0
                     else:
                         sell_qty = min(row["Quantity"], qty_held)
-                        proceeds = sell_qty * row["Price"] - row["Brokerage Fee"]
+                        proceeds = sell_qty * row["Price"] - row["Charge Fee"]
                         cost_basis = sell_qty * avg_cost
                         realized_pnl += proceeds - cost_basis
                         qty_held -= sell_qty
