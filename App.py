@@ -11,11 +11,40 @@ SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive"
 ]
-TXN_SHEET = "Transactions"
-DIV_SHEET = "Dividends"
 
 TXN_COLUMNS = ["Date", "Type", "Ticker", "Currency", "Price", "Quantity", "Charge Fee", "Exchange Rate"]
-DIV_COLUMNS = ["Date", "Ticker", "Currency", "Quantity Held", "Gross", "Withholding Tax", "Net"]
+DIV_COLUMNS = ["Date", "Ticker", "Currency", "Gross", "Withholding Tax", "Net"]
+
+
+# ---------------- LOGIN ----------------
+def show_login():
+    st.title("📈 Stock Portfolio Tracker")
+    st.caption("Please log in to continue")
+
+    users = st.secrets.get("users", {})
+    if not users:
+        st.error("No users configured in secrets. Add a [users] section with name = \"pin\" pairs.")
+        st.stop()
+
+    with st.form("login_form"):
+        name = st.selectbox("Name", list(users.keys()))
+        pin = st.text_input("PIN", type="password")
+        submitted = st.form_submit_button("Log in", use_container_width=True)
+        if submitted:
+            if str(users.get(name)) == pin:
+                st.session_state.current_user = name
+                st.rerun()
+            else:
+                st.error("Incorrect PIN.")
+    st.stop()
+
+
+if "current_user" not in st.session_state:
+    show_login()
+
+current_user = st.session_state.current_user
+TXN_SHEET = f"{current_user}_Transactions"
+DIV_SHEET = f"{current_user}_Dividends"
 
 
 # ---------------- GOOGLE SHEETS CONNECTION ----------------
@@ -38,8 +67,7 @@ def get_or_create_worksheet(name, columns):
 
 def load_records(sheet_name, columns):
     ws = get_or_create_worksheet(sheet_name, columns)
-    records = ws.get_all_records()
-    return records
+    return ws.get_all_records()
 
 
 def append_record(sheet_name, columns, record):
@@ -62,8 +90,15 @@ if "transactions" not in st.session_state:
 if "dividends" not in st.session_state:
     st.session_state.dividends = load_records(DIV_SHEET, DIV_COLUMNS)
 
-st.title("📈 Stock Portfolio Tracker")
-st.caption("Connected to Google Sheets — changes save automatically")
+col_title, col_user = st.columns([4, 1])
+with col_title:
+    st.title("📈 Stock Portfolio Tracker")
+    st.caption(f"Logged in as **{current_user}** — connected to Google Sheets")
+with col_user:
+    if st.button("Log out"):
+        for k in ["current_user", "transactions", "dividends"]:
+            st.session_state.pop(k, None)
+        st.rerun()
 
 
 def get_holdings_snapshot(as_of_date=None):
@@ -201,58 +236,67 @@ with tab_form:
                     st.error(f"Failed to save to Google Sheet: {e}")
 
 # ---------------- ADD DIVIDEND ----------------
+def _apply_div_ticker_pick():
+    if st.session_state.get("div_ticker_pick"):
+        st.session_state["div_ticker_input"] = st.session_state["div_ticker_pick"]
+
 with tab_dividend:
-    if not st.session_state.transactions:
-        st.info("You need at least one Buy transaction before logging a dividend.")
-    else:
-        div_date = st.date_input("Date", value=date.today(), key="div_date")
+    existing_div_tickers = sorted(set(t["Ticker"] for t in st.session_state.transactions)) if st.session_state.transactions else []
 
-        holdings_as_of = get_holdings_snapshot(as_of_date=div_date)
-        held_keys = [k for k, v in holdings_as_of.items() if v["qty"] > 0]
+    if existing_div_tickers:
+        st.selectbox(
+            "Quick-pick a ticker you've used before (optional)",
+            [""] + existing_div_tickers,
+            key="div_ticker_pick",
+            on_change=_apply_div_ticker_pick,
+        )
 
-        if not held_keys:
-            st.warning(f"You held no shares as of {div_date}. Check the date, or add the Buy transaction first.")
+    div_ticker_input = st.text_input("Ticker", placeholder="e.g. AAPL", key="div_ticker_input").upper()
+    div_currency = st.selectbox("Currency", ["MYR", "USD"], key="div_currency_choice")
+    div_date = st.date_input("Date", value=date.today(), key="div_date")
+
+    # Informational only — doesn't block submission if it can't find a match
+    holdings_as_of = get_holdings_snapshot(as_of_date=div_date)
+    qty_info = holdings_as_of.get((div_ticker_input, div_currency), {}).get("qty")
+    if div_ticker_input:
+        if qty_info is not None and qty_info > 0:
+            st.caption(f"You held **{qty_info:,.4f} shares** of {div_ticker_input} ({div_currency}) as of {div_date}")
         else:
-            options = [f"{t} ({c})" for t, c in held_keys]
-            choice = st.selectbox("Ticker", options, key="div_ticker_choice")
-            idx = options.index(choice)
-            sel_ticker, sel_currency = held_keys[idx]
-            qty_held = holdings_as_of[(sel_ticker, sel_currency)]["qty"]
+            st.caption("No matching holding found for this ticker/currency/date combo — you can still log the dividend manually.")
 
-            st.caption(f"You held **{qty_held:,.4f} shares** of {sel_ticker} ({sel_currency}) as of {div_date}")
+    with st.form("div_form", clear_on_submit=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            gross_div = st.number_input(f"Gross Dividend ({div_currency})", min_value=0.0, step=0.01, format="%.2f")
+        with col2:
+            net_div = st.number_input(f"Net Dividend ({div_currency})", min_value=0.0, step=0.01, format="%.2f")
 
-            with st.form("div_form", clear_on_submit=True):
-                col1, col2 = st.columns(2)
-                with col1:
-                    gross_div = st.number_input(f"Gross Dividend ({sel_currency})", min_value=0.0, step=0.01, format="%.2f")
-                with col2:
-                    net_div = st.number_input(f"Net Dividend ({sel_currency})", min_value=0.0, step=0.01, format="%.2f")
+        withheld = gross_div - net_div
+        if gross_div > 0:
+            st.caption(f"Implied tax/fees withheld: {div_currency} {withheld:,.2f}")
 
-                withheld = gross_div - net_div
-                if gross_div > 0:
-                    st.caption(f"Implied tax/fees withheld: {sel_currency} {withheld:,.2f}")
+        submitted = st.form_submit_button("Add Dividend", use_container_width=True)
 
-                submitted = st.form_submit_button("Add Dividend", use_container_width=True)
-
-                if submitted:
-                    if net_div <= 0:
-                        st.error("Please enter at least the net dividend amount.")
-                    else:
-                        record = {
-                            "Date": str(div_date),
-                            "Ticker": sel_ticker,
-                            "Currency": sel_currency,
-                            "Quantity Held": qty_held,
-                            "Gross": round(gross_div, 2),
-                            "Withholding Tax": round(withheld, 2),
-                            "Net": round(net_div, 2),
-                        }
-                        try:
-                            append_record(DIV_SHEET, DIV_COLUMNS, record)
-                            st.session_state.dividends.append(record)
-                            st.success(f"Dividend recorded: {sel_currency} {net_div:,.2f} net from {sel_ticker}")
-                        except Exception as e:
-                            st.error(f"Failed to save to Google Sheet: {e}")
+        if submitted:
+            if not div_ticker_input:
+                st.error("Please enter a ticker.")
+            elif net_div <= 0:
+                st.error("Please enter at least the net dividend amount.")
+            else:
+                record = {
+                    "Date": str(div_date),
+                    "Ticker": div_ticker_input,
+                    "Currency": div_currency,
+                    "Gross": round(gross_div, 2),
+                    "Withholding Tax": round(withheld, 2),
+                    "Net": round(net_div, 2),
+                }
+                try:
+                    append_record(DIV_SHEET, DIV_COLUMNS, record)
+                    st.session_state.dividends.append(record)
+                    st.success(f"Dividend recorded: {div_currency} {net_div:,.2f} net from {div_ticker_input}")
+                except Exception as e:
+                    st.error(f"Failed to save to Google Sheet: {e}")
 
     if st.session_state.dividends:
         st.subheader("Dividend log")
