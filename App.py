@@ -67,7 +67,7 @@ def get_or_create_worksheet(name, columns):
 
 def load_records(sheet_name, columns):
     ws = get_or_create_worksheet(sheet_name, columns)
-    return ws.get_all_records()
+    return ws.get_all_records(numericise_ignore=["all"])
 
 
 def append_record(sheet_name, columns, record):
@@ -139,7 +139,7 @@ def _apply_ticker_pick():
         st.session_state["ticker_input"] = st.session_state["ticker_pick"]
 
 with tab_form:
-    existing_tickers = sorted(set(t["Ticker"] for t in st.session_state.transactions)) if st.session_state.transactions else []
+    existing_tickers = sorted(set(str(t["Ticker"]) for t in st.session_state.transactions)) if st.session_state.transactions else []
 
     if existing_tickers:
         st.selectbox(
@@ -241,7 +241,7 @@ def _apply_div_ticker_pick():
         st.session_state["div_ticker_input"] = st.session_state["div_ticker_pick"]
 
 with tab_dividend:
-    existing_div_tickers = sorted(set(t["Ticker"] for t in st.session_state.transactions)) if st.session_state.transactions else []
+    existing_div_tickers = sorted(set(str(t["Ticker"]) for t in st.session_state.transactions)) if st.session_state.transactions else []
 
     if existing_div_tickers:
         st.selectbox(
