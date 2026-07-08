@@ -27,7 +27,7 @@ def show_login():
         st.stop()
 
     with st.form("login_form"):
-        name = st.selectbox("Name")
+        name = st.text_input("Name")
         pin = st.text_input("PIN", type="password")
         submitted = st.form_submit_button("Log in", use_container_width=True)
         if submitted:
