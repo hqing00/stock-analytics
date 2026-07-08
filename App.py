@@ -27,7 +27,7 @@ def show_login():
         st.stop()
 
     with st.form("login_form"):
-        name = st.text_input("Name")
+        name = st.selectbox("Name", list(users.keys()))
         pin = st.text_input("PIN", type="password")
         submitted = st.form_submit_button("Log in", use_container_width=True)
         if submitted:
@@ -134,21 +134,8 @@ def get_holdings_snapshot(as_of_date=None):
 tab_form, tab_dividend, tab_dashboard = st.tabs(["➕ Add Transaction", "💵 Add Dividend", "📊 Dashboard"])
 
 # ---------------- ADD BUY/SELL ----------------
-def _apply_ticker_pick():
-    if st.session_state.get("ticker_pick"):
-        st.session_state["ticker_input"] = st.session_state["ticker_pick"]
 
 with tab_form:
-    existing_tickers = sorted(set(str(t["Ticker"]) for t in st.session_state.transactions)) if st.session_state.transactions else []
-
-    if existing_tickers:
-        st.selectbox(
-            "Quick-pick a ticker you've used before (optional)",
-            [""] + existing_tickers,
-            key="ticker_pick",
-            on_change=_apply_ticker_pick,
-        )
-
     ticker_input = st.text_input("Ticker", placeholder="e.g. AAPL", key="ticker_input").upper()
     currency = st.selectbox("Currency", ["MYR", "USD"], key="currency_choice")
 
@@ -240,7 +227,7 @@ with tab_dividend:
     div_ticker_input = st.text_input("Ticker", placeholder="e.g. AAPL", key="div_ticker_input").upper()
     div_currency = st.selectbox("Currency", ["MYR", "USD"], key="div_currency_choice")
     div_date = st.date_input("Date", value=date.today(), key="div_date")
- 
+
     # Informational only — doesn't block submission if it can't find a match
     holdings_as_of = get_holdings_snapshot(as_of_date=div_date)
     qty_info = holdings_as_of.get((div_ticker_input, div_currency), {}).get("qty")
@@ -249,20 +236,20 @@ with tab_dividend:
             st.caption(f"You held **{qty_info:,.4f} shares** of {div_ticker_input} ({div_currency}) as of {div_date}")
         else:
             st.caption("No matching holding found for this ticker/currency/date combo — you can still log the dividend manually.")
- 
+
     with st.form("div_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
         with col1:
             gross_div = st.number_input(f"Gross Dividend ({div_currency})", min_value=0.0, step=0.01, format="%.2f")
         with col2:
             net_div = st.number_input(f"Net Dividend ({div_currency})", min_value=0.0, step=0.01, format="%.2f")
- 
+
         withheld = gross_div - net_div
         if gross_div > 0:
             st.caption(f"Implied tax/fees withheld: {div_currency} {withheld:,.2f}")
- 
+
         submitted = st.form_submit_button("Add Dividend", use_container_width=True)
- 
+
         if submitted:
             if not div_ticker_input:
                 st.error("Please enter a ticker.")
@@ -283,7 +270,7 @@ with tab_dividend:
                     st.success(f"Dividend recorded: {div_currency} {net_div:,.2f} net from {div_ticker_input}")
                 except Exception as e:
                     st.error(f"Failed to save to Google Sheet: {e}")
- 
+
     if st.session_state.dividends:
         st.subheader("Dividend log")
         st.caption("Edit any cell directly, or use the trash icon on a row to delete it. Click Save to sync to Google Sheets.")
