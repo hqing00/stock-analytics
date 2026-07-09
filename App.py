@@ -3,7 +3,8 @@ import pandas as pd
 import altair as alt
 import gspread
 from google.oauth2.service_account import Credentials
-from datetime import date
+from datetime import date, datetime
+import yfinance as yf
 
 st.set_page_config(page_title="Stock Portfolio Tracker", page_icon="📈", layout="wide")
 
@@ -27,7 +28,7 @@ def show_login():
         st.stop()
 
     with st.form("login_form"):
-        name = st.text_input("Name")
+        name = st.selectbox("Name", list(users.keys()))
         pin = st.text_input("PIN", type="password")
         submitted = st.form_submit_button("Log in", use_container_width=True)
         if submitted:
@@ -131,7 +132,7 @@ def get_holdings_snapshot(as_of_date=None):
     return holdings
 
 
-tab_form, tab_dividend, tab_dashboard = st.tabs(["➕ Add Transaction", "💵 Add Dividend", "📊 Dashboard"])
+tab_form, tab_dividend, tab_dashboard, tab_news = st.tabs(["➕ Add Transaction", "💵 Add Dividend", "📊 Dashboard", "🔍 Stock Search & News"])
 
 # ---------------- ADD BUY/SELL ----------------
 
@@ -366,3 +367,113 @@ with tab_dashboard:
             col_b.metric("Realized Earn", f"{currency} {summary_df['Realized Earn'].sum():,.2f}")
             col_c.metric("Dividends (Net)", f"{currency} {total_dividends:,.2f}")
             col_d.metric("Tickers Held", f"{(summary_df['Quantity Held'] > 0).sum()}")
+
+
+# ---------------- STOCK SEARCH & NEWS ----------------
+@st.cache_data(ttl=600)  # 10 minutes
+def search_tickers(query):
+    try:
+        results = yf.Search(query, max_results=8).quotes
+        return [
+            {"symbol": r.get("symbol", ""), "name": r.get("shortname") or r.get("longname") or ""}
+            for r in results if r.get("symbol")
+        ]
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=600)
+def get_company_info(ticker_symbol):
+    t = yf.Ticker(ticker_symbol)
+    info = t.info or {}
+    return {
+        "name": info.get("longName") or info.get("shortName") or ticker_symbol,
+        "sector": info.get("sector", "—"),
+        "industry": info.get("industry", "—"),
+        "market_cap": info.get("marketCap"),
+        "currency": info.get("currency", ""),
+        "current_price": info.get("currentPrice") or info.get("regularMarketPrice"),
+        "previous_close": info.get("previousClose"),
+        "summary": info.get("longBusinessSummary", ""),
+    }
+
+
+@st.cache_data(ttl=900)  # 15 minutes
+def fetch_news(ticker_symbol):
+    t = yf.Ticker(ticker_symbol)
+    return t.news or []
+
+
+def format_market_cap(value, currency=""):
+    if not value:
+        return "—"
+    if value >= 1e12:
+        return f"{currency} {value/1e12:.2f}T"
+    if value >= 1e9:
+        return f"{currency} {value/1e9:.2f}B"
+    if value >= 1e6:
+        return f"{currency} {value/1e6:.2f}M"
+    return f"{currency} {value:,.0f}"
+
+
+with tab_news:
+    st.caption("Look up any stock — search by ticker or company name")
+
+    search_query = st.text_input("Search", placeholder="e.g. AAPL or Apple", key="stock_search_input")
+
+    selected_ticker = None
+    if search_query:
+        matches = search_tickers(search_query)
+        if matches:
+            options = [f"{m['symbol']} — {m['name']}" for m in matches]
+            picked = st.selectbox("Select the stock you meant", options, key="stock_search_pick")
+            selected_ticker = matches[options.index(picked)]["symbol"]
+        else:
+            # Fall back to treating the input directly as a ticker
+            selected_ticker = search_query.upper()
+            st.caption(f"No search matches — trying '{selected_ticker}' directly as a ticker symbol.")
+
+    if selected_ticker:
+        try:
+            with st.spinner(f"Loading {selected_ticker}..."):
+                info = get_company_info(selected_ticker)
+                news_items = fetch_news(selected_ticker)
+
+            st.subheader(info["name"])
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Price", f"{info['currency']} {info['current_price']:,.2f}" if info["current_price"] else "—")
+            col2.metric("Prev Close", f"{info['currency']} {info['previous_close']:,.2f}" if info["previous_close"] else "—")
+            col3.metric("Market Cap", format_market_cap(info["market_cap"], info["currency"]))
+            col4.metric("Sector", info["sector"])
+
+            if info["summary"]:
+                with st.expander("Company overview"):
+                    st.write(info["summary"])
+
+            st.divider()
+            st.subheader("Recent news")
+
+            if not news_items:
+                st.info("No recent news found for this stock.")
+            else:
+                for item in news_items:
+                    content = item.get("content", item)
+                    title = content.get("title") if isinstance(content, dict) else item.get("title", "")
+                    link = (
+                        content.get("canonicalUrl", {}).get("url")
+                        if isinstance(content, dict) and isinstance(content.get("canonicalUrl"), dict)
+                        else item.get("link", "")
+                    )
+                    publisher = (
+                        content.get("provider", {}).get("displayName")
+                        if isinstance(content, dict) and isinstance(content.get("provider"), dict)
+                        else item.get("publisher", "")
+                    )
+                    if not title:
+                        continue
+                    st.markdown(f"**[{title}]({link})**")
+                    st.caption(publisher)
+        except Exception as e:
+            st.error(f"Couldn't load data for '{selected_ticker}': {e}")
+    else:
+        st.info("Type a ticker or company name above to get started.")
