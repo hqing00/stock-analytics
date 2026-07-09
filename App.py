@@ -6,7 +6,7 @@ from google.oauth2.service_account import Credentials
 from datetime import date, datetime
 import yfinance as yf
 
-st.set_page_config(page_title="Stock Portfolio Tracker", page_icon="📈", layout="wide")
+st.set_page_config(page_title="FIN News & Investment Analytics Platform", page_icon="📈", layout="wide")
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
