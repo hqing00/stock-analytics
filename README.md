@@ -34,4 +34,16 @@ A web-based stock news and portfolio management application is to record stock t
 5. Yahoo Finance
 
 ## Screenshots
+![Dashboard](images/transaction1.png)
+![Dashboard](images/transaction2.png)
+![Dashboard](images/dividend.png)
+![Dashboard](images/dashboard.png)
+![Dashboard](images/news.png)
 
+## Purpose  
+This project was created as a learning project to explore how to build an interactive web application using Streamlit. The main objectives were:
+
+- To learn how to store and manage application data using Google Sheets as a lightweight database.
+- To understand how Streamlit can be used to build interactive dashboards and user interfaces.
+- To practice integrating external data sources to track the latest financial news from reliable sources.
+- To improve skills in Python, data processing, and application deployment.
