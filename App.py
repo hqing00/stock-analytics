@@ -19,7 +19,7 @@ DIV_COLUMNS = ["Date", "Ticker", "Currency", "Gross", "Withholding Tax", "Net"]
 
 # ---------------- LOGIN ----------------
 def show_login():
-    st.title("📈 Stock Portfolio Tracker")
+    st.title("📈 FIN News & Investment Analytics Platform")
     st.caption("Please log in to continue")
 
     users = st.secrets.get("users", {})
@@ -93,7 +93,7 @@ if "dividends" not in st.session_state:
 
 col_title, col_user = st.columns([4, 1])
 with col_title:
-    st.title("📈 Stock Portfolio Tracker")
+    st.title("📈 FIN News & Investment Analytics Platform")
     st.caption(f"Logged in as **{current_user}** — connected to Google Sheets")
 with col_user:
     if st.button("Log out"):
