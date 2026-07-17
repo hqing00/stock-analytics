@@ -4,9 +4,10 @@ import altair as alt
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import date, datetime
+import time
 import yfinance as yf
 
-st.set_page_config(page_title="FIN News & Investment Analytics Platform", page_icon="📈", layout="wide")
+st.set_page_config(page_title="Stock Portfolio Tracker", page_icon="📈", layout="wide")
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -19,7 +20,7 @@ DIV_COLUMNS = ["Date", "Ticker", "Currency", "Gross", "Withholding Tax", "Net"]
 
 # ---------------- LOGIN ----------------
 def show_login():
-    st.title("📈 FIN News & Investment Analytics Platform")
+    st.title("📈 Stock Portfolio Tracker")
     st.caption("Please log in to continue")
 
     users = st.secrets.get("users", {})
@@ -28,7 +29,7 @@ def show_login():
         st.stop()
 
     with st.form("login_form"):
-        name = st.text_input("Name")
+        name = st.selectbox("Name", list(users.keys()))
         pin = st.text_input("PIN", type="password")
         submitted = st.form_submit_button("Log in", use_container_width=True)
         if submitted:
@@ -93,7 +94,7 @@ if "dividends" not in st.session_state:
 
 col_title, col_user = st.columns([4, 1])
 with col_title:
-    st.title("📈 FIN News & Investment Analytics Platform")
+    st.title("📈 Stock Portfolio Tracker")
     st.caption(f"Logged in as **{current_user}** — connected to Google Sheets")
 with col_user:
     if st.button("Log out"):
@@ -370,10 +371,25 @@ with tab_dashboard:
 
 
 # ---------------- STOCK SEARCH & NEWS ----------------
-@st.cache_data(ttl=600)  # 10 minutes
+def _retry_yf(fn, retries=3, base_delay=2):
+    """Retries a yfinance call with increasing delay if rate-limited."""
+    last_error = None
+    for attempt in range(retries):
+        try:
+            return fn()
+        except Exception as e:
+            last_error = e
+            if "Too Many Requests" in str(e) or "Rate limited" in str(e):
+                time.sleep(base_delay * (attempt + 1))
+                continue
+            raise
+    raise last_error
+
+
+@st.cache_data(ttl=1800)  # 30 minutes — longer cache to reduce calls to Yahoo Finance
 def search_tickers(query):
     try:
-        results = yf.Search(query, max_results=8).quotes
+        results = _retry_yf(lambda: yf.Search(query, max_results=8).quotes)
         return [
             {"symbol": r.get("symbol", ""), "name": r.get("shortname") or r.get("longname") or ""}
             for r in results if r.get("symbol")
@@ -382,10 +398,12 @@ def search_tickers(query):
         return []
 
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=1800)
 def get_company_info(ticker_symbol):
-    t = yf.Ticker(ticker_symbol)
-    info = t.info or {}
+    def _load():
+        t = yf.Ticker(ticker_symbol)
+        return t.info or {}
+    info = _retry_yf(_load)
     return {
         "name": info.get("longName") or info.get("shortName") or ticker_symbol,
         "sector": info.get("sector", "—"),
@@ -398,10 +416,12 @@ def get_company_info(ticker_symbol):
     }
 
 
-@st.cache_data(ttl=900)  # 15 minutes
+@st.cache_data(ttl=1800)  # 30 minutes
 def fetch_news(ticker_symbol):
-    t = yf.Ticker(ticker_symbol)
-    return t.news or []
+    def _load():
+        t = yf.Ticker(ticker_symbol)
+        return t.news or []
+    return _retry_yf(_load)
 
 
 def format_market_cap(value, currency=""):
@@ -474,6 +494,13 @@ with tab_news:
                     st.markdown(f"**[{title}]({link})**")
                     st.caption(publisher)
         except Exception as e:
-            st.error(f"Couldn't load data for '{selected_ticker}': {e}")
+            if "Too Many Requests" in str(e) or "Rate limited" in str(e):
+                st.warning(
+                    f"Yahoo Finance is rate-limiting requests right now — this is common on shared cloud hosting "
+                    f"and not specific to your app. The app already retried a few times automatically. "
+                    f"Please wait a minute or two and try '{selected_ticker}' again."
+                )
+            else:
+                st.error(f"Couldn't load data for '{selected_ticker}': {e}")
     else:
         st.info("Type a ticker or company name above to get started.")
