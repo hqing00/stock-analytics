@@ -7,7 +7,7 @@ from datetime import date, datetime
 import time
 import yfinance as yf
 
-st.set_page_config(page_title="Stock Portfolio Tracker", page_icon="📈", layout="wide")
+st.set_page_config(page_title="FIN News & Investment Analytics Platform", page_icon="📈", layout="wide")
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -16,11 +16,12 @@ SCOPES = [
 
 TXN_COLUMNS = ["Date", "Type", "Ticker", "Currency", "Price", "Quantity", "Charge Fee", "Exchange Rate"]
 DIV_COLUMNS = ["Date", "Ticker", "Currency", "Gross", "Withholding Tax", "Net"]
+PRICE_COLUMNS = ["Ticker", "Currency", "Close Price", "Last Updated"]
 
 
 # ---------------- LOGIN ----------------
 def show_login():
-    st.title("📈 Stock Portfolio Tracker")
+    st.title("📈 FIN News & Investment Analytics Platform")
     st.caption("Please log in to continue")
 
     users = st.secrets.get("users", {})
@@ -47,6 +48,7 @@ if "current_user" not in st.session_state:
 current_user = st.session_state.current_user
 TXN_SHEET = f"{current_user}_Transactions"
 DIV_SHEET = f"{current_user}_Dividends"
+PRICE_SHEET = f"{current_user}_Prices"
 
 
 # ---------------- GOOGLE SHEETS CONNECTION ----------------
@@ -86,6 +88,37 @@ def overwrite_sheet(sheet_name, columns, records):
         ws.append_rows(rows)
 
 
+# ---------------- YFINANCE HELPERS (shared by Dashboard prices + Stock Search) ----------------
+def _retry_yf(fn, retries=3, base_delay=2):
+    """Retries a yfinance call with increasing delay if rate-limited."""
+    last_error = None
+    for attempt in range(retries):
+        try:
+            return fn()
+        except Exception as e:
+            last_error = e
+            if "Too Many Requests" in str(e) or "Rate limited" in str(e):
+                time.sleep(base_delay * (attempt + 1))
+                continue
+            raise
+    raise last_error
+
+
+@st.cache_data(ttl=86400)  # 24 hours — one auto-refresh per day per ticker
+def fetch_close_price(ticker_symbol):
+    """Returns the latest available close price, or None if it couldn't be fetched."""
+    def _load():
+        t = yf.Ticker(ticker_symbol)
+        hist = t.history(period="5d")
+        if hist.empty:
+            return None
+        return float(hist["Close"].iloc[-1])
+    try:
+        return _retry_yf(_load)
+    except Exception:
+        return None
+
+
 # ---------------- LOAD DATA (once per session) ----------------
 if "transactions" not in st.session_state:
     st.session_state.transactions = load_records(TXN_SHEET, TXN_COLUMNS)
@@ -94,7 +127,7 @@ if "dividends" not in st.session_state:
 
 col_title, col_user = st.columns([4, 1])
 with col_title:
-    st.title("📈 Stock Portfolio Tracker")
+    st.title("📈 FIN News & Investment Analytics Platform")
     st.caption(f"Logged in as **{current_user}** — connected to Google Sheets")
 with col_user:
     if st.button("Log out"):
@@ -230,7 +263,6 @@ with tab_dividend:
     div_currency = st.selectbox("Currency", ["MYR", "USD"], key="div_currency_choice")
     div_date = st.date_input("Date", value=date.today(), key="div_date")
 
-    # Informational only — doesn't block submission if it can't find a match
     holdings_as_of = get_holdings_snapshot(as_of_date=div_date)
     qty_info = holdings_as_of.get((div_ticker_input, div_currency), {}).get("qty")
     if div_ticker_input:
@@ -301,6 +333,14 @@ with tab_dashboard:
     if not st.session_state.transactions:
         st.info("Add some transactions first to see your dashboard.")
     else:
+        col_refresh, col_note = st.columns([1, 3])
+        with col_refresh:
+            if st.button("🔄 Refresh Prices"):
+                fetch_close_price.clear()
+                st.rerun()
+        with col_note:
+            st.caption("Closing prices auto-refresh once every 24 hours, or click Refresh for the latest.")
+
         df = pd.DataFrame(st.session_state.transactions)
         df["Date"] = pd.to_datetime(df["Date"])
         df["Price"] = pd.to_numeric(df["Price"], errors="coerce")
@@ -311,6 +351,8 @@ with tab_dashboard:
         div_df = pd.DataFrame(st.session_state.dividends) if st.session_state.dividends else pd.DataFrame(columns=["Currency", "Net", "Date"])
         if not div_df.empty:
             div_df["Net"] = pd.to_numeric(div_df["Net"], errors="coerce").fillna(0)
+
+        price_records_to_save = []
 
         for currency in df["Currency"].unique():
             st.subheader(f"💰 {currency} Portfolio")
@@ -350,11 +392,29 @@ with tab_dashboard:
                         realized_pnl += proceeds - cost_basis
                         qty_held -= sell_qty
 
+                current_price = None
+                if qty_held > 0:
+                    current_price = fetch_close_price(ticker)
+                    if current_price is not None:
+                        price_records_to_save.append({
+                            "Ticker": ticker,
+                            "Currency": currency,
+                            "Close Price": current_price,
+                            "Last Updated": str(datetime.now()),
+                        })
+
+                market_value = qty_held * current_price if current_price is not None else None
+                total_cost_held = qty_held * avg_cost
+                unrealized_gain = (market_value - total_cost_held) if market_value is not None else None
+
                 summary_rows.append({
                     "Ticker": ticker,
                     "Quantity Held": round(qty_held, 4),
                     "Avg Cost (DCA)": round(avg_cost, 4),
-                    "Total Cost (Held)": round(qty_held * avg_cost, 2),
+                    "Current Price": round(current_price, 4) if current_price is not None else "—",
+                    "Total Cost (Held)": round(total_cost_held, 2),
+                    "Market Value": round(market_value, 2) if market_value is not None else "—",
+                    "Unrealized Gain": round(unrealized_gain, 2) if unrealized_gain is not None else "—",
                     "Realized Earn": round(realized_pnl, 2),
                 })
 
@@ -362,31 +422,26 @@ with tab_dashboard:
             st.dataframe(summary_df, use_container_width=True)
 
             total_dividends = div_df[div_df["Currency"] == currency]["Net"].sum() if not div_df.empty else 0.0
+            total_market_value = sum(r["Market Value"] for r in summary_rows if r["Market Value"] != "—")
+            total_unrealized = sum(r["Unrealized Gain"] for r in summary_rows if r["Unrealized Gain"] != "—")
 
-            col_a, col_b, col_c, col_d = st.columns(4)
+            col_a, col_b, col_c, col_d, col_e = st.columns(5)
             col_a.metric("Total Invested (Held)", f"{currency} {summary_df['Total Cost (Held)'].sum():,.2f}")
-            col_b.metric("Realized Earn", f"{currency} {summary_df['Realized Earn'].sum():,.2f}")
-            col_c.metric("Dividends (Net)", f"{currency} {total_dividends:,.2f}")
-            col_d.metric("Tickers Held", f"{(summary_df['Quantity Held'] > 0).sum()}")
+            col_b.metric("Market Value", f"{currency} {total_market_value:,.2f}")
+            col_c.metric("Unrealized Gain", f"{currency} {total_unrealized:,.2f}")
+            col_d.metric("Realized Earn", f"{currency} {summary_df['Realized Earn'].sum():,.2f}")
+            col_e.metric("Dividends (Net)", f"{currency} {total_dividends:,.2f}")
+
+        # Persist all fetched prices to the Prices tab in one batch write
+        if price_records_to_save:
+            try:
+                overwrite_sheet(PRICE_SHEET, PRICE_COLUMNS, price_records_to_save)
+            except Exception as e:
+                st.caption(f"⚠️ Couldn't save fetched prices to Google Sheets: {e}")
 
 
 # ---------------- STOCK SEARCH & NEWS ----------------
-def _retry_yf(fn, retries=3, base_delay=2):
-    """Retries a yfinance call with increasing delay if rate-limited."""
-    last_error = None
-    for attempt in range(retries):
-        try:
-            return fn()
-        except Exception as e:
-            last_error = e
-            if "Too Many Requests" in str(e) or "Rate limited" in str(e):
-                time.sleep(base_delay * (attempt + 1))
-                continue
-            raise
-    raise last_error
-
-
-@st.cache_data(ttl=1800)  # 30 minutes — longer cache to reduce calls to Yahoo Finance
+@st.cache_data(ttl=600)  # 10 minutes
 def search_tickers(query):
     try:
         results = _retry_yf(lambda: yf.Search(query, max_results=8).quotes)
@@ -398,7 +453,7 @@ def search_tickers(query):
         return []
 
 
-@st.cache_data(ttl=1800)
+@st.cache_data(ttl=600)
 def get_company_info(ticker_symbol):
     def _load():
         t = yf.Ticker(ticker_symbol)
@@ -416,7 +471,7 @@ def get_company_info(ticker_symbol):
     }
 
 
-@st.cache_data(ttl=1800)  # 30 minutes
+@st.cache_data(ttl=900)  # 15 minutes
 def fetch_news(ticker_symbol):
     def _load():
         t = yf.Ticker(ticker_symbol)
@@ -449,7 +504,6 @@ with tab_news:
             picked = st.selectbox("Select the stock you meant", options, key="stock_search_pick")
             selected_ticker = matches[options.index(picked)]["symbol"]
         else:
-            # Fall back to treating the input directly as a ticker
             selected_ticker = search_query.upper()
             st.caption(f"No search matches — trying '{selected_ticker}' directly as a ticker symbol.")
 
